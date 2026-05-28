@@ -2,7 +2,7 @@
 
 ## Goal
 
-Extend the owlready2 fork at `/Users/remzicelebi/workspace/claude-ws/owlready2/` with a fast, correct pyoxigraph-backed SPARQL engine to replace the rdflib adapter, while keeping the SQLite/triplelite primary store untouched.
+Extend the owlready2 fork with a fast, correct pyoxigraph-backed SPARQL engine to replace the rdflib adapter, while keeping the SQLite/triplelite primary store untouched.
 
 ## Current Progress
 
