@@ -11,6 +11,23 @@ import pyoxigraph as _ox
 
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
+
+def _rdfxml_to_ntriples(source, base_iri=None):
+    """Parse RDF/XML (file path or bytes) to an N-Triples string using pyoxigraph."""
+    store = _ox.Store()
+    if isinstance(source, (str, os.PathLike)):
+        data = open(source, "rb")
+    else:
+        data = BytesIO(source)
+    kw = {"format": _ox.RdfFormat.RDF_XML}
+    if base_iri:
+        kw["base_iri"] = base_iri
+    store.load(data, **kw)
+    lines = []
+    for q in store.quads_for_pattern(None, None, None, _ox.DefaultGraph()):
+        lines.append("%s %s %s .\n" % (q.subject, q.predicate, q.object))
+    return "".join(lines)
+
 import owlready2, owlready2.util
 from owlready2 import *
 from owlready2.base import _universal_abbrev_2_datatype, _universal_datatype_2_abbrev
@@ -4672,20 +4689,13 @@ I took a placebo
   def test_format_6(self):
     world = self.new_world()
     n = world.get_ontology("http://www.semanticweb.org/jiba/ontologies/2017/0/test").load()
-    
-    import subprocess
-    rapper = subprocess.Popen(["rapper", "-q", "-g", os.path.join(HERE, "test.owl")], stdout = subprocess.PIPE)
-    triples1 = rapper.stdout.read().decode("unicode-escape")
-    rapper.stdout.close()
-    rapper.wait()
-    
-    rapper = subprocess.Popen(["rapper", "-q", "-g", "-", "http://test/xxx.owl"], stdin = subprocess.PIPE, stdout = subprocess.PIPE)
-    n.save(rapper.stdin, "rdfxml")
-    rapper.stdin.close()
-    triples2 = rapper.stdout.read().decode("unicode-escape")
-    rapper.stdout.close()
-    rapper.wait()
-    
+
+    triples1 = _rdfxml_to_ntriples(os.path.join(HERE, "test.owl"))
+
+    buf = BytesIO()
+    n.save(buf, "rdfxml")
+    triples2 = _rdfxml_to_ntriples(buf.getvalue(), base_iri="http://test/xxx.owl")
+
     self.assert_ntriples_equivalent(triples1, triples2)
     
   def test_format_8(self):
@@ -4860,13 +4870,9 @@ multiple lines with " and ’ and \ and & and < and > and é."""
     import owlready2.rdfxml_2_ntriples
     world = self.new_world()
     n = world.get_ontology("http://www.test.org/test_ns.owl").load()
-    
-    import subprocess
-    rapper = subprocess.Popen(["rapper", "-q", "-g", os.path.join(HERE, "test_ns.owl")], stdout = subprocess.PIPE)
-    triples2 = rapper.stdout.read().decode("unicode-escape")
-    rapper.stdout.close()
-    rapper.wait()
-    
+
+    triples2 = _rdfxml_to_ntriples(os.path.join(HERE, "test_ns.owl"))
+
     triples1 = ""
     def on_prepare_triple(s,p,o):
       nonlocal triples1
@@ -4882,14 +4888,9 @@ multiple lines with " and ’ and \ and & and < and > and é."""
       elif d:                                        o = '"%s"^^<%s>' % (o, d)
       else:                                          o = '"%s"' % o
       triples1 += "%s %s %s .\n" % (s,p,o)
-    #owlready2.driver.parse_rdfxml(os.path.join(HERE, "test_ns.owl"), on_prepare_triple, on_prepare_data)
-    
-    #self.assert_ntriples_equivalent(triples1, triples2)
-    
-    
-    triples1 = ""
+
     owlready2.rdfxml_2_ntriples.parse(os.path.join(HERE, "test_ns.owl"), on_prepare_triple, on_prepare_data)
-    
+
     self.assert_ntriples_equivalent(triples1, triples2)
     
   def test_format_21(self):
@@ -4917,22 +4918,13 @@ multiple lines with " and ’ and \ and & and < and > and é."""
   def test_format_23(self):
     world = self.new_world()
     n = world.get_ontology("http://www.test.org/test_url").load()
-    
-    import subprocess
-    rapper = subprocess.Popen(["rapper", "-q", "-g", os.path.join(HERE, "test_url.owl")], stdout = subprocess.PIPE)
-    triples1 = rapper.stdout.read().decode("unicode-escape")
-    rapper.stdout.close()
-    rapper.wait()
-    
-    rapper = subprocess.Popen(["rapper", "-q", "-g", "-", "http://www.test.org/test_url"], stdin = subprocess.PIPE, stdout = subprocess.PIPE)
-    n.save(rapper.stdin, "rdfxml")
-    rapper.stdin.close()
-    triples2 = rapper.stdout.read().decode("unicode-escape")
-    rapper.stdout.close()
-    rapper.wait()
-    
-    # Rapper does not remove trailing / at the end of the ontology IRI
-    triples1 = triples1.replace("<http://www.test.org/testurl/>", "<http://www.test.org/testurl>")
+
+    triples1 = _rdfxml_to_ntriples(os.path.join(HERE, "test_url.owl"))
+
+    buf = BytesIO()
+    n.save(buf, "rdfxml")
+    triples2 = _rdfxml_to_ntriples(buf.getvalue(), base_iri="http://www.test.org/test_url")
+
     self.assert_ntriples_equivalent(triples1, triples2)
     
   def test_format_24(self):
