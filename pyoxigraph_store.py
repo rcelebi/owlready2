@@ -334,11 +334,15 @@ class OxigraphGraph:
     """
 
     def __init__(self, world):
-        self._world       = world
-        self._prefixes    = {}
-        self._contexts    = {}   # onto → OxigraphContextGraph
-        self._store_proxy = _OxigraphStoreProxy(self)
-        self._ox_store    = None  # cached pyoxigraph.Store; None = dirty
+        self._world        = world
+        self._prefixes     = {}
+        self._contexts     = {}   # onto → OxigraphContextGraph
+        self._store_proxy  = _OxigraphStoreProxy(self)
+        self._ox_store     = None  # cached pyoxigraph.Store; None = dirty
+        # Strong-reference cache: IRI string → owlready2 entity.
+        # Prevents WeakValueDictionary in _entities_cache from evicting live
+        # query results between iterations, eliminating repeated SQLite loads.
+        self._entity_cache: dict = {}
 
     # ── namespace binding ─────────────────────────────────────────────────────
 
@@ -362,6 +366,7 @@ class OxigraphGraph:
     def _invalidate_cache(self):
         """Mark the store cache dirty so it is rebuilt on the next query."""
         self._ox_store = None
+        self._entity_cache.clear()
 
     # ── context access ────────────────────────────────────────────────────────
 
@@ -391,20 +396,67 @@ class OxigraphGraph:
     # ── internal SPARQL helpers ───────────────────────────────────────────────
 
     def _query(self, query, onto_filter=None):
-        """Execute a SPARQL SELECT/ASK, yield translated result rows."""
-        if onto_filter is None:
-            ox_store = self._get_cached_store()
-        else:
-            ox_store = _build_ox_store(self._world, onto_filter)
-        result   = ox_store.query(_inject_prefixes(self._prefixes, query))
+        """Execute SPARQL SELECT/ASK; return list of translated rows (not a generator)."""
+        ox_store = (self._get_cached_store() if onto_filter is None
+                    else _build_ox_store(self._world, onto_filter))
+        result = ox_store.query(_inject_prefixes(self._prefixes, query))
 
         if isinstance(result, _ox.QueryBoolean):
-            yield [bool(result)]
-            return
+            return [[bool(result)]]
 
-        for sol in result:
-            row = [_ox_to_owlready(sol[i], self._world) for i in range(len(sol))]
-            yield row
+        world      = self._world
+        cache      = self._entity_cache
+        _NamedNode = _ox.NamedNode
+        abbrev_d   = world.graph._abbreviate_d
+
+        if abbrev_d is not None:
+            # Dict mode (threshold ≤ 2M resources): two direct dict hits per IRI.
+            entities = world._entities
+
+            def _convert(term):
+                if term.__class__ is not _NamedNode:
+                    return _ox_to_owlready(term, world)
+                iri = term.value
+                if iri in cache:
+                    return cache[iri]
+                storid = abbrev_d.get(iri)
+                if storid is None:
+                    obj = None
+                else:
+                    obj = entities.get(storid)
+                    if obj is None:
+                        obj = world._get_by_storid(storid, iri)
+                cache[iri] = obj
+                return obj
+        else:
+            # SQL mode (>2M resources): batch-resolve all unseen IRIs up front so
+            # the convert loop below stays a simple cache hit.
+            rows = list(result)
+            new_iris = list(dict.fromkeys(           # deduplicate, preserve order
+                term.value
+                for row in rows
+                for term in row
+                if term.__class__ is _NamedNode and term.value not in cache
+            ))
+            graph = world.graph
+            for i in range(0, len(new_iris), 900):   # SQLite variable limit
+                batch = new_iris[i:i + 900]
+                placeholders = ','.join('?' * len(batch))
+                for iri, storid in graph.execute(
+                        f"SELECT iri, storid FROM resources WHERE iri IN ({placeholders})",
+                        batch).fetchall():
+                    cache[iri] = world._get_by_storid(storid, iri)
+            result = rows                             # already materialised
+
+            def _convert(term):
+                if term.__class__ is not _NamedNode:
+                    return _ox_to_owlready(term, world)
+                iri = term.value
+                if iri not in cache:
+                    cache[iri] = world[iri]
+                return cache[iri]
+
+        return [[_convert(term) for term in sol] for sol in result]
 
     def _update(self, query, onto_filter=None):
         """Execute a SPARQL UPDATE and sync the diff back to triplelite."""
@@ -506,7 +558,7 @@ class OxigraphGraph:
     # ── public API ────────────────────────────────────────────────────────────
 
     def query_owlready(self, query):
-        yield from self._query(query)
+        return self._query(query)
 
     def update(self, query):
         self._update(query)
@@ -520,4 +572,4 @@ class OxigraphGraph:
             yield (bool(result),)
             return
         for sol in result:
-            yield tuple(sol[i] for i in range(len(sol)))
+            yield tuple(sol)

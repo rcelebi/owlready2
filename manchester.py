@@ -251,15 +251,13 @@ def to_manchester(expr, prefixes=None):
         for py_name, manc_token in _FACET_TO_MANCHESTER.items():
             val = getattr(expr, py_name, None)
             if val is not None:
-                if manc_token in ("pattern", "whiteSpace", "length",
-                                  "minLength", "maxLength",
-                                  "totalDigits", "fractionDigits"):
-                    facts.append('%s "%s"' % (manc_token, val)
-                                 if manc_token == "pattern"
-                                 else "%s %s" % (manc_token, val))
+                if manc_token == "pattern":
+                    facts.append('pattern "%s"' % val)
                 else:
                     facts.append("%s %s" % (manc_token, val))
         return ("%s[%s]" % (base, ", ".join(facts))) if facts else base
+
+
 
     if isinstance(expr, Inverse):
         return "inverse (%s)" % _entity_label(expr.property, prefixes)
@@ -789,6 +787,13 @@ def parse_manchester_expression(text, ontology, prefixes=None):
 # 2c: Manchester Ontology File (.omn) Parser
 # ─────────────────────────────────────────────────────────────────────────────
 
+def _local_name(iri):
+    for sep in ("#", "/"):
+        if sep in iri:
+            return iri.rsplit(sep, 1)[-1]
+    return iri
+
+
 _FRAME_KW = frozenset([
     "Ontology", "Prefix", "Import",
     "Class", "ObjectProperty", "DataProperty", "AnnotationProperty",
@@ -872,14 +877,8 @@ class _OmnParser:
         entity = self._world[iri]
         if entity is not None:
             return entity
-        for sep in ("#", "/"):
-            if sep in iri:
-                local = iri.rsplit(sep, 1)[-1]
-                break
-        else:
-            local = iri
         with self._onto:
-            return type(local, (base_cls,), {})
+            return type(_local_name(iri), (base_cls,), {})
 
     # ── expression slicer (delegates to _ExprParser) ─────────────────────────
 
@@ -1142,15 +1141,9 @@ class _OmnParser:
     def _individual_frame(self):
         import owlready2
         iri = self._eat_iri()
-        for sep in ("#", "/"):
-            if sep in iri:
-                local = iri.rsplit(sep, 1)[-1]
-                break
-        else:
-            local = iri
         entity = self._world.get(iri)
         if entity is None:
-            entity = owlready2.Thing(local, namespace=self._onto)
+            entity = owlready2.Thing(_local_name(iri), namespace=self._onto)
         with self._onto:
             while self._is_section():
                 sec = self._eat().value
@@ -1585,7 +1578,7 @@ def _patch_world():
         # Complex expression: check every individual's types
         for ind in self.individuals():
             for t in list(ind.is_a):
-                if _expr_contains(t, expr) or t == expr:
+                if _expr_contains(t, expr):
                     k = id(ind)
                     if k not in seen:
                         seen.add(k); result.append(ind)

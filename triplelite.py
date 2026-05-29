@@ -417,7 +417,7 @@ class Graph(BaseMainGraph):
   
   def select_abbreviate_method(self):
     nb = self.execute("SELECT count(*) FROM resources").fetchone()[0]
-    if nb < 100000:
+    if nb < 2000000:
       iri_storid = self.execute("SELECT iri, storid FROM resources").fetchall()
       self.  _abbreviate_d = dict(iri_storid)
       self._unabbreviate_d = dict((storid, iri) for (iri, storid) in  iri_storid)
